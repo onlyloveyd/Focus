@@ -28,13 +28,10 @@ final class Settings: ObservableObject {
     ]
 
     private init() {
-        // 首次运行：预填用户自己点名的几个常见分心应用，之后可在界面里改
+        // 首次运行：默认只拦微信，其余在界面里按需添加
         if defaults.object(forKey: "blockedBundles") == nil {
             defaults.set([
                 "com.tencent.xinWeChat",
-                "com.google.Chrome",
-                "com.apple.Safari",
-                "com.kingsoft.wpsoffice.mac",
             ], forKey: "blockedBundles")
             defaults.set(true, forKey: "enabled")
         }
