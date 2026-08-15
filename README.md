@@ -32,6 +32,20 @@ swift build -c release
 `Focus.app` 的应用图标（Finder、登录项里显示的）由 `Scripts/generate-icon.swift`
 矢量绘制并自动嵌入（深色底 + 青色靶心），无需任何设计素材；想换风格直接改脚本重跑。
 
+## 分发
+
+```bash
+./Scripts/make-dmg.sh    # 生成 Focus.dmg（universal：同时支持 Apple Silicon 和 Intel）
+```
+
+镜像内是 `Focus.app` + `Applications` 文件夹快捷方式，拖拽即装。构建产物为双架构
+（`--arch arm64 --arch x86_64`），系统要求 macOS 13（Ventura）及以上。
+
+**下载方的首次打开（未签名未公证）**：直接双击会被 Gatekeeper 拦下，任选其一：
+
+- 系统设置 → 隐私与安全性 → 拉到底点「仍要打开」；
+- 或终端执行：`xattr -d com.apple.quarantine /Applications/Focus.app`。
+
 ## 试用 / 调试
 
 ```bash

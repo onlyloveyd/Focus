@@ -1,3 +1,4 @@
 .build/
 Focus.app/
+*.dmg
 .DS_Store

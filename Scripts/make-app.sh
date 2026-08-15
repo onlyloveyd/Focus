@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-swift build -c release
+swift build -c release --arch arm64 --arch x86_64
 
 APP="Focus.app"
 rm -rf "$APP"
@@ -15,7 +15,17 @@ rm -rf "$ICONSET"
 swift Scripts/generate-icon.swift "$ICONSET"
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 
-cp .build/release/Focus "$APP/Contents/MacOS/Focus"
+# 多架构(--arch)构建的产物位于 .build/apple/Products/Release，单架构在 .build/release
+BIN=".build/release/Focus"
+if [ -f ".build/apple/Products/Release/Focus" ]; then
+    BIN=".build/apple/Products/Release/Focus"
+fi
+cp "$BIN" "$APP/Contents/MacOS/Focus"
+ARCHS=$(lipo -archs "$APP/Contents/MacOS/Focus")
+if [[ "$ARCHS" != *arm64* || "$ARCHS" != *x86_64* ]]; then
+    echo "❌ 产物不是双架构：$ARCHS（请检查 swift build 参数）" && exit 1
+fi
+echo "架构: $ARCHS"
 
 cat > "$APP/Contents/Info.plist" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
