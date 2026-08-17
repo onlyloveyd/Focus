@@ -36,7 +36,7 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
     <key>CFBundleIdentifier</key><string>com.yidong.focus</string>
     <key>CFBundleName</key><string>Focus</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.1.1</string>
+    <key>CFBundleShortVersionString</key><string>0.1.2</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>LSUIElement</key><true/>
 </dict>
@@ -44,5 +44,9 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
 EOF
 
 touch "$APP"  # 让 Finder 刷新图标缓存
+
+# ad-hoc 签名：无开发者证书时给应用一个稳定身份，
+# 可显著改善 SMAppService 登录项注册的可靠性与系统信任度
+codesign --force --sign - "$APP"
 echo "✅ 已生成 $APP"
 echo "   可拖入 /Applications，并在 系统设置 → 通用 → 登录项与扩展 → 开机时打开 中添加它。"

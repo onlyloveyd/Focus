@@ -127,6 +127,10 @@ struct SettingsView: View {
 
             Section(header: Text("状态")) {
                 Toggle("启用拦截", isOn: $settings.enabled)
+                Toggle("开机自动启动", isOn: $settings.launchAtLogin)
+                Text("移动过 Focus.app 位置的话，请重新勾选一次。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

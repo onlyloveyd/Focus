@@ -12,10 +12,11 @@ enum Utility {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var enableItem: NSMenuItem!
     private var pauseItem: NSMenuItem!
+    private var launchItem: NSMenuItem!
     private var styleItems: [NSMenuItem] = []
 
     private let overlayController = OverlayController()
@@ -62,6 +63,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] style in
                 self?.styleItems.forEach { $0.state = ($0.representedObject as? String) == style.rawValue ? .on : .off }
+            }
+            .store(in: &cancellables)
+
+        Settings.shared.$launchAtLogin
+            .receive(on: RunLoop.main)
+            .sink { [weak self] on in
+                self?.launchItem?.state = on ? .on : .off
             }
             .store(in: &cancellables)
 
@@ -162,6 +170,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pauseItem.target = self
         menu.addItem(pauseItem)
 
+        launchItem = NSMenuItem(title: "开机自动启动", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+        launchItem.target = self
+        launchItem.state = Settings.shared.launchAtLogin ? .on : .off
+        menu.addItem(launchItem)
+
         menu.addItem(.separator())
 
         // 文案风格子菜单（三选一，勾选随设置联动）
@@ -179,14 +192,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let styleSubmenuItem = NSMenuItem()
         styleSubmenuItem.title = "文案风格"
         styleSubmenuItem.submenu = styleMenu
+        styleSubmenuItem.image = menuIcon("text.quote")
         menu.addItem(styleSubmenuItem)
 
         let settingsItem = NSMenuItem(title: "拦截名单与设置…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
+        settingsItem.image = menuIcon("slider.horizontal.3")
         menu.addItem(settingsItem)
 
         let logItem = NSMenuItem(title: "查看记录…", action: #selector(openLog), keyEquivalent: "l")
         logItem.target = self
+        logItem.image = menuIcon("clock.arrow.circlepath")
         menu.addItem(logItem)
 
         menu.addItem(.separator())
@@ -195,9 +211,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quitItem.target = self
         menu.addItem(quitItem)
 
+        menu.delegate = self
         item.menu = menu
         statusItem = item
         updateStatusIcon()
+    }
+
+    /// 菜单项左侧的单色小图标，统一 16pt 保证三个入口视觉一致
+    private func menuIcon(_ symbol: String) -> NSImage? {
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        image?.size = NSSize(width: 16, height: 16)
+        return image
     }
 
     private func updateStatusIcon() {
@@ -214,6 +238,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Settings.shared.enabled.toggle()
         enableItem.state = Settings.shared.enabled ? .on : .off
         updateStatusIcon()
+    }
+
+    @objc private func toggleLaunchAtLogin() {
+        Settings.shared.launchAtLogin.toggle()
     }
 
     @objc private func togglePause() {
@@ -271,11 +299,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             defer: false)
         window.title = title
         window.isReleasedWhenClosed = false
+        window.delegate = self
         window.contentView = NSHostingView(rootView: AnyView(makeView()))
         window.center()
         self[keyPath: id] = window
         Utility.activateApp()
         window.makeKeyAndOrderFront(nil)
+    }
+
+    /// 设置窗口每次获得焦点时，从系统回读登录项真实状态
+    /// （用户可能在系统设置里增删过登录项，应用侧要跟着变）
+    func windowDidBecomeKey(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              window === settingsWindow else { return }
+        Settings.shared.refreshLoginItemState()
+    }
+
+    /// 焦点事件的兜底：应用整体被激活时也刷新一次
+    func applicationDidBecomeActive(_ notification: Notification) {
+        Settings.shared.refreshLoginItemState()
+    }
+
+    /// 菜单展开时回读登录项状态。必须同步读：状态查询很快（慢的是注册/注销），
+    /// 异步读会在菜单渲染后才返回，用户看到的还是旧勾选——而内部状态可能已被
+    /// 悄悄纠正，点一下就会执行与意图相反的操作
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        let enabled = LoginItem.isEnabled
+        launchItem?.state = enabled ? .on : .off
+        Settings.shared.syncLoginItemDisplay(enabled)
     }
 
     @objc private func quitTapped() {
