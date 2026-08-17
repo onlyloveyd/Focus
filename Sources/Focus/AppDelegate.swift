@@ -13,6 +13,9 @@ enum Utility {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
+    /// 供 SwiftUI（设置窗口）发起闸门请求的入口
+    static var shared: AppDelegate?
+
     private var statusItem: NSStatusItem?
     private var enableItem: NSMenuItem!
     private var pauseItem: NSMenuItem!
@@ -25,6 +28,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     private var passes: [String: Date] = [:]      // 已说明原因的应用 -> 放行截止时间
     private var mutedUntil: [String: Date] = [:]  // 拦截处理后的短暂静默，防止事件风暴
+    // 原因-时长对账：放行的 event id 待结算；会话在该应用真正回到前台时开始，
+    // 前台换成别的应用时结算"实际停留时长"
+    private var pendingOpenEvent: [String: Int64] = [:]
+    private var openSession: (bundleID: String, eventId: Int64, startedAt: Date)?
     private var pausedUntil: Date?
     private var pauseResetWork: DispatchWorkItem?
     private var lastGoodApp: NSRunningApplication?  // 最近一个处于前台的"非拦截"应用，用于"算了"后跳回
@@ -33,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private static let pauseDuration: TimeInterval = 30 * 60
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Self.shared = self
         setupStatusItem()
 
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -87,6 +95,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
               app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
               let bundleID = app.bundleIdentifier else { return }
 
+        // 原因-时长对账：前台换成了别的应用，结算上一个放行会话
+        if let session = openSession, session.bundleID != bundleID {
+            EventLog.shared.updateDuration(
+                eventId: session.eventId,
+                duration: Date().timeIntervalSince(session.startedAt))
+            openSession = nil
+        }
+
         guard Settings.shared.enabled else {
             lastGoodApp = app
             return
@@ -103,7 +119,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
         let now = Date()
         if let muted = mutedUntil[bundleID], now < muted { return }
-        if let pass = passes[bundleID], now < pass { return }
+        if let pass = passes[bundleID], now < pass {
+            // 免拦期内首次回到前台：开始计这个"放行会话"的实际停留时长
+            if let eventId = pendingOpenEvent[bundleID], openSession == nil {
+                openSession = (bundleID, eventId, now)
+                pendingOpenEvent[bundleID] = nil
+            }
+            return
+        }
         guard !overlayController.isShowing else { return }
 
         presentOverlay(for: app, bundleID: bundleID)
@@ -117,9 +140,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
         overlayController.present(
             target: target,
+            copy: OverlayCopy.copy(for: Settings.shared.copyStyle),
             todayCount: EventLog.shared.todayCount(bundleID: bundleID),
             onOpen: { [weak self] reason in
-                EventLog.shared.record(bundleID: bundleID, appName: target.appName, action: .opened, reason: reason)
+                let eventId = EventLog.shared.record(bundleID: bundleID, appName: target.appName, action: .opened, reason: reason)
+                self?.pendingOpenEvent[bundleID] = eventId
                 self?.passes[bundleID] = Date().addingTimeInterval(Settings.shared.passInterval)
                 self?.mutedUntil[bundleID] = Date().addingTimeInterval(1.5)
                 self?.bringToFront(app)
@@ -129,6 +154,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 self?.mutedUntil[bundleID] = Date().addingTimeInterval(1.5)
                 app.hide()
                 self?.bringToFront(self?.lastGoodApp)
+            })
+    }
+
+    // MARK: - 拆闸闸门：关拦截 / 移出名单 / 暂停，都要走同一道冷静流程
+
+    func requestGate(_ action: GateAction) {
+        guard !overlayController.isShowing else { return }
+        let copy = OverlayCopy.gateCopy(for: Settings.shared.copyStyle, action: action)
+        let target = OverlayTarget(
+            bundleID: action.bundleKey,
+            appName: action.logName,
+            icon: NSImage(systemSymbolName: "shield.lefthalf.filled", accessibilityDescription: nil))
+
+        // 副标题"今天第 N 次想拆闸门"的计数
+        let gateCountBundle: String
+        if case .remove(let bundleID, _) = action {
+            gateCountBundle = bundleID
+        } else {
+            gateCountBundle = action.bundleKey
+        }
+
+        overlayController.present(
+            target: target,
+            copy: copy,
+            todayCount: EventLog.shared.todayGateCount(bundleID: gateCountBundle),
+            onOpen: { [weak self] reason in
+                switch action {
+                case .disable:
+                    EventLog.shared.record(bundleID: action.bundleKey, appName: action.logName, action: .disabled, reason: reason)
+                    Settings.shared.enabled = false
+                case .pause:
+                    EventLog.shared.record(bundleID: action.bundleKey, appName: action.logName, action: .paused, reason: reason)
+                    self?.performPause()
+                case .remove(let bundleID, _):
+                    EventLog.shared.record(bundleID: bundleID, appName: action.logName, action: .removed, reason: reason)
+                    Settings.shared.blockedBundles.removeAll { $0 == bundleID }
+                }
+            },
+            onAbort: {
+                // 移出名单的收手事件要归到对应应用名下，否则汇总表会出现"同应用两行"
+                let bundle: String
+                if case .remove(let bundleID, _) = action {
+                    bundle = bundleID
+                } else {
+                    bundle = action.bundleKey
+                }
+                EventLog.shared.record(bundleID: bundle, appName: action.logName, action: .disarmAborted, reason: "")
             })
     }
 
@@ -144,6 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             icon: NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil))
         overlayController.present(
             target: target,
+            copy: OverlayCopy.copy(for: Settings.shared.copyStyle),
             todayCount: EventLog.shared.todayCount(bundleID: "focus.test"),
             onOpen: { reason in
                 EventLog.shared.record(bundleID: "focus.test", appName: "测试应用", action: .opened, reason: reason)
@@ -235,9 +308,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     @objc private func toggleEnabled() {
-        Settings.shared.enabled.toggle()
-        enableItem.state = Settings.shared.enabled ? .on : .off
-        updateStatusIcon()
+        if Settings.shared.enabled {
+            requestGate(.disable)   // 拆闸门要过闸；重新武装则无摩擦
+        } else {
+            Settings.shared.enabled = true
+        }
     }
 
     @objc private func toggleLaunchAtLogin() {
@@ -247,21 +322,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     @objc private func togglePause() {
         let isPaused = pausedUntil.map { Date() < $0 } ?? false
         if isPaused {
-            pausedUntil = nil
-            pauseResetWork?.cancel()
-            pauseResetWork = nil
-            pauseItem.title = "暂停拦截 30 分钟"
+            resumePause()
         } else {
-            pausedUntil = Date().addingTimeInterval(Self.pauseDuration)
-            pauseItem.title = "恢复拦截（已暂停）"
-            let work = DispatchWorkItem { [weak self] in
-                self?.pausedUntil = nil
-                self?.pauseItem?.title = "暂停拦截 30 分钟"
-                self?.updateStatusIcon()
-            }
-            pauseResetWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.pauseDuration, execute: work)
+            requestGate(.pause)
         }
+    }
+
+    private func performPause() {
+        pausedUntil = Date().addingTimeInterval(Self.pauseDuration)
+        pauseItem?.title = "恢复拦截（已暂停）"
+        let work = DispatchWorkItem { [weak self] in
+            self?.pausedUntil = nil
+            self?.pauseItem?.title = "暂停拦截 30 分钟"
+            self?.updateStatusIcon()
+        }
+        pauseResetWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pauseDuration, execute: work)
+        updateStatusIcon()
+    }
+
+    private func resumePause() {
+        pausedUntil = nil
+        pauseResetWork?.cancel()
+        pauseResetWork = nil
+        pauseItem?.title = "暂停拦截 30 分钟"
         updateStatusIcon()
     }
 
@@ -353,5 +437,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             return .terminateCancel
         }
         return .terminateNow
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // 退出前结算未完成的放行会话
+        if let session = openSession {
+            EventLog.shared.updateDuration(
+                eventId: session.eventId,
+                duration: Date().timeIntervalSince(session.startedAt))
+        }
     }
 }

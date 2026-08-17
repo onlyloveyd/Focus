@@ -63,7 +63,8 @@ final class OverlayModel: ObservableObject {
     }
 
     var titleText: String { copy.title(appName) }
-    var subtitleText: String { copy.subtitle(todayCount) }
+    /// todayCount 是已发生次数，展示的是"当前这次"是第几次，所以 +1
+    var subtitleText: String { copy.subtitle(todayCount + 1) }
 
     var trimmedReason: String { reason.trimmingCharacters(in: .whitespacesAndNewlines) }
 
@@ -120,6 +121,7 @@ final class OverlayController {
     var isShowing: Bool { !panels.isEmpty }
 
     func present(target: OverlayTarget,
+                 copy: OverlayCopy,
                  todayCount: Int,
                  onOpen: @escaping (String) -> Void,
                  onAbort: @escaping () -> Void) {
@@ -130,7 +132,7 @@ final class OverlayController {
             icon: target.icon,
             delaySeconds: Settings.shared.delaySeconds,
             minReasonLength: Settings.shared.minReasonLength,
-            copy: OverlayCopy.copy(for: Settings.shared.copyStyle),
+            copy: copy,
             onOpen: { [weak self] reason in
                 self?.dismiss()
                 onOpen(reason)

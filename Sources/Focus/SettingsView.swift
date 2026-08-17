@@ -49,7 +49,12 @@ struct SettingsView: View {
                         .padding(.vertical, 3)
                     }
                     .onDelete { offsets in
-                        settings.blockedBundles.remove(atOffsets: offsets)
+                        // 移出名单 = 拆闸门，需要过闸（冷静期 + 原因）
+                        for bundleID in offsets.map({ settings.blockedBundles[$0] }) {
+                            AppDelegate.shared?.requestGate(.remove(
+                                bundleID: bundleID,
+                                targetName: AppInfo.name(for: bundleID)))
+                        }
                     }
                 }
                 .frame(minHeight: 220)
@@ -63,7 +68,9 @@ struct SettingsView: View {
                     }
                     Button {
                         if let id = selection {
-                            settings.blockedBundles.removeAll { $0 == id }
+                            AppDelegate.shared?.requestGate(.remove(
+                                bundleID: id,
+                                targetName: AppInfo.name(for: id)))
                             selection = nil
                         }
                     } label: {
@@ -126,7 +133,16 @@ struct SettingsView: View {
             }
 
             Section(header: Text("状态")) {
-                Toggle("启用拦截", isOn: $settings.enabled)
+                // 关闭拦截 = 拆闸门，需要过闸；重新开启无摩擦
+                Toggle("启用拦截", isOn: Binding(
+                    get: { settings.enabled },
+                    set: { on in
+                        if on {
+                            settings.enabled = true
+                        } else {
+                            AppDelegate.shared?.requestGate(.disable)
+                        }
+                    }))
                 Toggle("开机自动启动", isOn: $settings.launchAtLogin)
                 Text("移动过 Focus.app 位置的话，请重新勾选一次。")
                     .font(.system(size: 11))
